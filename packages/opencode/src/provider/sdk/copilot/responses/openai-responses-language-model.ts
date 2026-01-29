@@ -19,6 +19,7 @@ import {
   postJsonToApi,
 } from "@ai-sdk/provider-utils"
 import { z } from "zod/v4"
+import { createHash } from "crypto"
 import type { OpenAIConfig } from "./openai-config"
 import { openaiFailedResponseHandler } from "./openai-error"
 import { codeInterpreterInputSchema, codeInterpreterOutputSchema } from "./tool/code-interpreter"
@@ -30,6 +31,23 @@ import type { OpenAIResponsesIncludeOptions, OpenAIResponsesIncludeValue } from 
 import { prepareResponsesTools } from "./openai-responses-prepare-tools"
 import type { OpenAIResponsesModelId } from "./openai-responses-settings"
 import { localShellInputSchema } from "./tool/local-shell"
+
+/**
+ * Shorten tool call IDs to fit OpenAI's 40 character limit.
+ * Uses a deterministic approach: keep first 32 chars + 8 char hash of full ID.
+ * This ensures IDs are unique and stay under the 40 char limit.
+ */
+function shortenToolCallId(id: string): string {
+  const MAX_LENGTH = 40
+  if (id.length <= MAX_LENGTH) {
+    return id
+  }
+
+  // Take first 32 characters and append 8-char hash of the full ID
+  const prefix = id.substring(0, 32)
+  const hash = createHash("sha256").update(id).digest("hex").substring(0, 8)
+  return `${prefix}${hash}`
+}
 
 const webSearchCallItem = z.object({
   type: z.literal("web_search_call"),
@@ -891,7 +909,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (value.item.type === "web_search_call") {
                 ongoingToolCalls[value.output_index] = {
                   toolName: webSearchToolName ?? "web_search",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                 }
 
                 controller.enqueue({
@@ -902,7 +920,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (value.item.type === "computer_call") {
                 ongoingToolCalls[value.output_index] = {
                   toolName: "computer_use",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                 }
 
                 controller.enqueue({
@@ -913,7 +931,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (value.item.type === "code_interpreter_call") {
                 ongoingToolCalls[value.output_index] = {
                   toolName: "code_interpreter",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   codeInterpreter: {
                     containerId: value.item.container_id,
                   },
@@ -933,7 +951,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (value.item.type === "file_search_call") {
                 controller.enqueue({
                   type: "tool-call",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "file_search",
                   input: "{}",
                   providerExecuted: true,
@@ -941,7 +959,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (value.item.type === "image_generation_call") {
                 controller.enqueue({
                   type: "tool-call",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "image_generation",
                   input: "{}",
                   providerExecuted: true,
@@ -1008,7 +1026,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
                 controller.enqueue({
                   type: "tool-call",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "web_search",
                   input: JSON.stringify({ action: value.item.action }),
                   providerExecuted: true,
@@ -1016,7 +1034,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
                 controller.enqueue({
                   type: "tool-result",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "web_search",
                   result: { status: value.item.status },
                 })
@@ -1030,7 +1048,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
                 controller.enqueue({
                   type: "tool-call",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "computer_use",
                   input: "",
                   providerExecuted: true,
@@ -1038,7 +1056,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
                 controller.enqueue({
                   type: "tool-result",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "computer_use",
                   result: {
                     type: "computer_use_tool_result",
@@ -1050,7 +1068,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
                 controller.enqueue({
                   type: "tool-result",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "file_search",
                   result: {
                     queries: value.item.queries,
@@ -1069,7 +1087,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
                 controller.enqueue({
                   type: "tool-result",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "code_interpreter",
                   result: {
                     outputs: value.item.outputs,
@@ -1078,7 +1096,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (value.item.type === "image_generation_call") {
                 controller.enqueue({
                   type: "tool-result",
-                  toolCallId: value.item.id,
+                  toolCallId: shortenToolCallId(value.item.id),
                   toolName: "image_generation",
                   result: {
                     result: value.item.result,
@@ -1147,7 +1165,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
             } else if (isResponseImageGenerationCallPartialImageChunk(value)) {
               controller.enqueue({
                 type: "tool-result",
-                toolCallId: value.item_id,
+                toolCallId: shortenToolCallId(value.item_id),
                 toolName: "image_generation",
                 result: {
                   result: value.partial_image_b64,

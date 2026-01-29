@@ -6,6 +6,7 @@ import {
 } from "@ai-sdk/provider"
 import { convertToBase64, parseProviderOptions } from "@ai-sdk/provider-utils"
 import { z } from "zod/v4"
+import { createHash } from "crypto"
 import type { OpenAIResponsesInput, OpenAIResponsesReasoning } from "./openai-responses-api-types"
 import { localShellInputSchema, localShellOutputSchema } from "./tool/local-shell"
 
@@ -16,6 +17,23 @@ import { localShellInputSchema, localShellOutputSchema } from "./tool/local-shel
 function isFileId(data: string, prefixes?: readonly string[]): boolean {
   if (!prefixes) return false
   return prefixes.some((prefix) => data.startsWith(prefix))
+}
+
+/**
+ * Shorten tool call IDs to fit OpenAI's 40 character limit.
+ * Uses a deterministic approach: keep first 32 chars + 8 char hash of full ID.
+ * This ensures IDs are unique and stay under the 40 char limit.
+ */
+function shortenToolCallId(id: string): string {
+  const MAX_LENGTH = 40
+  if (id.length <= MAX_LENGTH) {
+    return id
+  }
+
+  // Take first 32 characters and append 8-char hash of the full ID
+  const prefix = id.substring(0, 32)
+  const hash = createHash("sha256").update(id).digest("hex").substring(0, 8)
+  return `${prefix}${hash}`
 }
 
 export async function convertToOpenAIResponsesInput({
@@ -142,7 +160,7 @@ export async function convertToOpenAIResponsesInput({
                 const parsedInput = localShellInputSchema.parse(part.input)
                 input.push({
                   type: "local_shell_call",
-                  call_id: part.toolCallId,
+                  call_id: shortenToolCallId(part.toolCallId),
                   id: (part.providerOptions?.openai?.itemId as string) ?? undefined,
                   action: {
                     type: "exec",
@@ -159,7 +177,7 @@ export async function convertToOpenAIResponsesInput({
 
               input.push({
                 type: "function_call",
-                call_id: part.toolCallId,
+                call_id: shortenToolCallId(part.toolCallId),
                 name: part.toolName,
                 arguments: JSON.stringify(part.input),
                 id: (part.providerOptions?.openai?.itemId as string) ?? undefined,
@@ -285,7 +303,7 @@ export async function convertToOpenAIResponsesInput({
           if (hasLocalShellTool && part.toolName === "local_shell" && output.type === "json") {
             input.push({
               type: "local_shell_call_output",
-              call_id: part.toolCallId,
+              call_id: shortenToolCallId(part.toolCallId),
               output: localShellOutputSchema.parse(output.value).output,
             })
             break
@@ -309,7 +327,7 @@ export async function convertToOpenAIResponsesInput({
 
           input.push({
             type: "function_call_output",
-            call_id: part.toolCallId,
+            call_id: shortenToolCallId(part.toolCallId),
             output: contentValue,
           })
         }
