@@ -1274,6 +1274,24 @@ export namespace Provider {
         const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
         const signals: AbortSignal[] = []
 
+        // Fix for reasoning models: Replace max_tokens with max_completion_tokens
+        // OpenAI reasoning models (gpt-5, o1-4) require max_completion_tokens
+        if (opts.body && typeof opts.body === "string") {
+          try {
+            const body = JSON.parse(opts.body)
+            // Check if this is a reasoning model request
+            const isReasoningModel = body.model && /^(gpt-[45]|o[1-4])/.test(body.model)
+            if (isReasoningModel && body.max_tokens !== undefined) {
+              // Replace max_tokens with max_completion_tokens
+              body.max_completion_tokens = body.max_tokens
+              delete body.max_tokens
+              opts.body = JSON.stringify(body)
+            }
+          } catch (e) {
+            // Ignore JSON parse errors, continue with original body
+          }
+        }
+
         if (opts.signal) signals.push(opts.signal)
         if (chunkAbortCtl) signals.push(chunkAbortCtl.signal)
         if (options["timeout"] !== undefined && options["timeout"] !== null && options["timeout"] !== false)
