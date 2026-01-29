@@ -314,17 +314,18 @@ export namespace LLM {
     })
   }
 
-  async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {
-    const disabled = Permission.disabled(
-      Object.keys(input.tools),
-      Permission.merge(input.agent.permission, input.permission ?? []),
-    )
+  async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user" | "model">) {
+    const disabled = PermissionNext.disabled(Object.keys(input.tools), input.agent.permission)
     for (const tool of Object.keys(input.tools)) {
       if (input.user.tools?.[tool] === false || disabled.has(tool)) {
         delete input.tools[tool]
       }
     }
-    return input.tools
+
+    // Apply tool count filtering for models with limits (OpenAI: 128 tools max)
+    const filteredTools = ProviderTransform.filterTools(input.model.id, input.tools)
+
+    return filteredTools
   }
 
   // Check if messages contain any tool-call content
