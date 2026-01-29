@@ -6,6 +6,9 @@ import type { Provider } from "./provider"
 import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
+import { MODEL_PATTERN_REGEX } from "./models"
+import { CORE_TOOLS, MAX_MCP_TOOLS } from "./tools-config"
+import type { ToolFilter } from "./contracts/tool-filter"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -15,6 +18,101 @@ function mimeToModality(mime: string): Modality | undefined {
   if (mime.startsWith("video/")) return "video"
   if (mime === "application/pdf") return "pdf"
   return undefined
+}
+
+/**
+ * Tool Filter Implementation
+ * Filters tools for limited-capability models like gpt-oss-120b
+ */
+class GptOssToolFilter implements ToolFilter {
+  filterTools(
+    modelId: string,
+    tools: Record<string, any>,
+  ): Record<string, any> {
+    if (!this.isModelLimited(modelId)) {
+      return tools
+    }
+
+    const filtered: Record<string, any> = {}
+    let mcp_count = 0
+
+    // Include core tools
+    for (const [toolName, tool] of Object.entries(tools)) {
+      if (CORE_TOOLS.includes(toolName)) {
+        filtered[toolName] = tool
+      }
+    }
+
+    // Include MCP tools up to limit
+    for (const [toolName, tool] of Object.entries(tools)) {
+      if (CORE_TOOLS.includes(toolName)) continue // Already included
+
+      // Check if this is an MCP tool (contains underscore prefix from sanitization)
+      const isMcpTool = toolName.includes("_") && !toolName.startsWith("_")
+
+      if (isMcpTool && mcp_count < MAX_MCP_TOOLS) {
+        filtered[toolName] = tool
+        mcp_count++
+      }
+    }
+
+    // Include remaining built-in tools up to 128 total (OpenAI limit)
+    const MAX_TOTAL_TOOLS = 128
+    for (const [toolName, tool] of Object.entries(tools)) {
+      if (filtered[toolName]) continue // Already included
+      if (Object.keys(filtered).length >= MAX_TOTAL_TOOLS) break
+
+      filtered[toolName] = tool
+    }
+
+    return filtered
+  }
+
+  isModelLimited(modelId: string): boolean {
+    return MODEL_PATTERN_REGEX.test(modelId)
+  }
+
+  getErrorMessage(toolName: string, availableTools: string[]): string {
+    const toolList = availableTools.join(", ")
+    return `Tool '${toolName}' not available in model context. Available: [${toolList}]`
+  }
+}
+
+// Singleton instance
+const gptOssToolFilter = new GptOssToolFilter()
+
+/**
+ * Filter tools for a specific model
+ * Returns the filtered tool set based on model capabilities
+ */
+function filterToolsForModel(
+  modelId: string,
+  tools: Record<string, any>,
+): Record<string, any> {
+  const filtered = gptOssToolFilter.filterTools(modelId, tools)
+
+  // Log specialization decision
+  if (gptOssToolFilter.isModelLimited(modelId)) {
+    const before = Object.keys(tools).length
+    const after = Object.keys(filtered).length
+    console.log(
+      `Model '${modelId}' matched pattern 'gpt-oss-.*', applying specialization: tool filtering (tools: ${before} → ${after})`
+    )
+  }
+
+  return filtered
+}
+
+/**
+ * Generate error message for tool that's not available in model context
+ * Used when a model attempts to call a filtered-out tool
+ */
+function getFilteredToolErrorMessage(
+  toolName: string,
+  availableTools: Record<string, any>,
+): string {
+  const toolList = Object.keys(availableTools).sort().join(", ")
+  return `Tool '${toolName}' not available in model context. Available: [${toolList}]. Try using one of the available tools instead.`
 }
 
 export namespace ProviderTransform {
@@ -785,6 +883,16 @@ export namespace ProviderTransform {
       result["promptCacheKey"] = input.sessionID
     }
 
+    // gpt-oss models have broken parallel tool calling - disable it
+    if (model.api.id.includes("gpt-oss")) {
+      result["parallelToolCalls"] = false
+    }
+
+    if (model.api.id.includes("gpt-5") && !model.api.id.includes("gpt-5-chat")) {
+      if (model.providerID.includes("codex")) {
+        result["store"] = false
+      }
+
     if (input.model.api.npm === "@ai-sdk/google" || input.model.api.npm === "@ai-sdk/google-vertex") {
       if (input.model.capabilities.reasoning) {
         result["thinkingConfig"] = {
@@ -860,6 +968,20 @@ export namespace ProviderTransform {
     }
 
     return result
+  }
+
+  export function filterTools(
+    modelId: string,
+    tools: Record<string, any>,
+  ): Record<string, any> {
+    return filterToolsForModel(modelId, tools)
+  }
+
+  export function getToolErrorMessage(
+    toolName: string,
+    availableTools: Record<string, any>,
+  ): string {
+    return getFilteredToolErrorMessage(toolName, availableTools)
   }
 
   export function smallOptions(model: Provider.Model) {

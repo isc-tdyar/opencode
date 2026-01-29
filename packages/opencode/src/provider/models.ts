@@ -11,6 +11,10 @@ import { Filesystem } from "../util/filesystem"
 // Falls back to undefined in dev mode when snapshot doesn't exist
 /* @ts-ignore */
 
+// Model Pattern Constants
+// Matches models with tool count limitations (gpt-oss, OpenAI models with 128 tool limit)
+export const MODEL_PATTERN_REGEX = /gpt-oss-.*|^(gpt-[45]|o[1-4])/
+
 export namespace ModelsDev {
   const log = Log.create({ service: "models.dev" })
   const filepath = path.join(Global.Path.cache, "models.json")
